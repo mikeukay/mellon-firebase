@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+  	function isLoggedIn() {
+  		return request.auth.uid != null;
+  	}
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if isLoggedIn() && uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /teams/{teamId} {
+      allow read: if isLoggedIn() && resource.data.members[request.auth.uid] != null;
+      allow create: if isLoggedIn();
+      allow update, delete: if isLoggedIn() && resource.data.members[request.auth.uid] != null && resource.data.members[request.auth.uid].admin == true;
+
+      function teamData() {
+        return get(/databases/$(database)/documents/teams/$(teamId)).data;
+      }
+
+      function isTeamMember() {
+      	return isLoggedIn() && teamData().members[request.auth.uid] != null;
+      }
+
+      function isTeamAdmin() {
+      	return isTeamMember() && teamData().members[request.auth.uid].admin == true;
+      }
+
+      function isTaskNameValid(incomingData) {
+      	return incomingData.name.size() <= 32 && incomingData.name == incomingData.name.replace("\n", "");
+      }
+
+      function isTaskDescriptionValid(incomingData) {
+      	return incomingData.description.size() <= 512;
+      }
+
+      function isTaskValid(incomingData, storedData) {
+      	return incomingData.started != null && incomingData.completed != null && isTaskNameValid(incomingData) && isTaskDescriptionValid(incomingData);
+      }
+
+      function taskNameAndDescNotModified(incomingData, storedData) {
+      	return incomingData.name == storedData.name && incomingData.description == storedData.description;
+      }
+
+      match /tasks/{taskId} {
+      	allow read: if isTeamMember();
+      	allow create: if isTaskNameValid(request.resource.data) && isTaskDescriptionValid(request.resource.data) && isTeamAdmin();
+      	allow delete: if isTeamAdmin();
+      	allow update: if isTaskValid(request.resource.data, resource.data) && (isTeamAdmin() || (isTeamMember() && taskNameAndDescNotModified(request.resource.data, resource.data)));
+      }
+    }
+
+  }
+}
